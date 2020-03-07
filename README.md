@@ -9,12 +9,12 @@ For this to work, you need a working domain, e.g duckdns.org.
 
 Source the following variables before you deploy this stack:
 
-export DOMAIN=<yourdomain>
+export DOMAIN=yourdomain
   
-export EMAIL="<youremail>" # needed for Letsencrypt
+export EMAIL=youremail # needed for Letsencrypt
   
 export USER=admin
 
-export PASSWORD="yourpassword"
+export PASSWORD=yourpassword
 
 export HASHED_PASSWORD=$(openssl passwd -apr1 $PASSWORD)
