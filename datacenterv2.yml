@@ -21,7 +21,7 @@ services:
       - --entrypoints.web-secured.address=:443
       - "--certificatesresolvers.mytlschallenge.acme.httpchallenge=true"
       - --certificatesresolvers.mytlschallenge.acme.httpChallenge.entrypoint=web
-      - --certificatesresolvers.mytlschallenge.acme.email=hegenious@gmail.com
+      - --certificatesresolvers.mytlschallenge.acme.email=<youremail>
       - --certificatesresolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json
     ports:
       - "80:80"
