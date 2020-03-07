@@ -1,0 +1,147 @@
+version: "3.3"
+
+services:
+  traefik:
+    image: traefik:v2.0.2
+    depends_on:
+      - consul-leader
+    command:
+      # --providers.consul=true
+      # --providers.consul.endpoint="consul-leader:8500"
+      - --api=true # set to 'false' on production
+      - --api.dashboard=true # see https://docs.traefik.io/v2.0/operations/dashboard/#secure-mode for how to secure the dashboard
+      - --api.debug=true # enable additional endpoints for debugging and profiling
+      - --log.level=DEBUG # debug while we get it working, for more levels/info see https://docs.traefik.io/observability/logs/
+      - --providers.docker=true
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - --providers.docker.swarmMode=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik-public
+      - --entrypoints.web.address=:80
+      - --entrypoints.web-secured.address=:443
+      - "--certificatesresolvers.mytlschallenge.acme.httpchallenge=true"
+      - --certificatesresolvers.mytlschallenge.acme.httpChallenge.entrypoint=web
+      - --certificatesresolvers.mytlschallenge.acme.email=hegenious@gmail.com
+      - --certificatesresolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      # "8080:8080" # traefik dashboard
+      - "443:443"
+    volumes:
+      - traefik-certificates:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-public
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+        - "traefik.http.routers.http-catchall.entrypoints=web"
+        - "traefik.http.routers.http-catchall.middlewares=redirect-to-https@docker"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+        - "traefik.http.routers.api-secured.rule=Host(`api.$DOMAIN`)"
+        - "traefik.http.routers.api-secured.entrypoints=web-secured"
+        - "traefik.http.routers.api-secured.tls.certresolver=mytlschallenge"
+        - "traefik.http.routers.api.rule=Host(`api.$DOMAIN`)"
+        - "traefik.http.routers.api.service=api@internal" # Let the dashboard access the traefik api
+        - "traefik.http.routers.api.middlewares=auth"
+        - "traefik.http.middlewares.auth.basicauth.users=$USER:$HASHED_PASSWORD"
+    # Dummy service for Swarm port detection. The port can be any valid integer value.
+        - "traefik.http.services.api.loadbalancer.server.port=8080"
+#...
+  portainer:
+    image: portainer/portainer
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(`ptr.$DOMAIN`)"
+        - "traefik.http.routers.portainer.entrypoints=web"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000" # give real port where service listens
+        - "traefik.http.routers.portainer-secured.rule=Host(`ptr.$DOMAIN`)"
+        - "traefik.http.routers.portainer-secured.entrypoints=web-secured"
+        - "traefik.http.routers.portainer-secured.tls.certresolver=mytlschallenge"
+
+    volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+        - /var/data/portainer:/portainerdata
+    command: -H unix:///var/run/docker.sock
+    networks:
+      - traefik-public
+      - agent_network
+#...
+  agent:
+    image: portainer/agent
+    environment:
+      AGENT_CLUSTER_ADDR: tasks.agent
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - agent_network
+    ports:
+      - target: 9001
+        published: 9001
+        protocol: tcp
+        mode: host
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
+        preferences:
+          - spread: node.id
+#...
+  consul-leader:
+    image: consul
+    command: agent -server -client=0.0.0.0 -bootstrap -ui
+    volumes:
+      - consul-data-leader:/consul/data
+    environment:
+      - CONSUL_BIND_INTERFACE=eth0
+      - 'CONSUL_LOCAL_CONFIG={"leave_on_terminate": true}'
+    networks:
+      - default
+      - traefik-public
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.consul-leader.rule=Host(`consul.$DOMAIN`)"
+        - "traefik.http.routers.consul-leader.entrypoints=web"
+        - "traefik.http.services.consul-leader.loadbalancer.server.port=8500" # give real port where service listens
+        - "traefik.http.routers.consul-leader-secured.rule=Host(`consul.$DOMAIN`)"
+        - "traefik.http.routers.consul-leader-secured.entrypoints=web-secured"
+        - "traefik.http.routers.consul-leader-secured.tls.certresolver=mytlschallenge"
+#...
+  consul-replica:
+    image: consul:1.5
+    command: agent -server -client=0.0.0.0 -retry-join="consul-leader"
+    volumes:
+      - consul-data-replica:/consul/data
+    environment:
+      - CONSUL_BIND_INTERFACE=eth0
+      - 'CONSUL_LOCAL_CONFIG={"leave_on_terminate": true}'
+    networks:
+      - default
+      - traefik-public
+    deploy:
+      replicas: ${CONSUL_REPLICAS:-3}
+      placement:
+        preferences:
+          - spread: node.id
+#...
+networks:
+  traefik-public:
+    external: true
+  agent_network:
+#...
+volumes:
+  traefik-certificates:
+  portainerdata:
+  consul-data-leader:
+  consul-data-replica:
